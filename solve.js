@@ -12,9 +12,11 @@ function escapeHtml(text) {
   return text.replace(/[&<>"']/g, (c) => ESCAPES[c]);
 }
 
-const SLUG_MAX = 64;
+const SLUG_CACHE = new Map();
 
 function slugify(text) {
+  const cached = SLUG_CACHE.get(text);
+  if (cached !== undefined) return cached;
   const plain = text.normalize('NFKD').replace(/\p{M}/gu, '');
   let out = '';
   let gap = false;
@@ -30,8 +32,10 @@ function slugify(text) {
     gap = false;
     out += keep;
   }
-  out = out.slice(0, SLUG_MAX).replace(/-+$/, '');
-  return out === '' ? 'untitled' : out;
+  out = out.slice(0, 64).replace(/-+$/, '');
+  const result = out === '' ? 'untitled' : out;
+  SLUG_CACHE.set(text, result);
+  return result;
 }
 
 function uniqueSlug(slug, taken) {
@@ -235,6 +239,10 @@ function lex(src) {
 
 const ESCAPABLE = new Set(['\\', '`', '*', '_', '[', ']', '(', ')', '#', '+', '-', '.', '!', '>']);
 
+// inline() batches each run of ordinary characters into `plain` and escapes it in one call, instead of
+// calling escapeHtml per character: escapeHtml over a run equals escaping each char, since its replacements
+// are independent single characters. A flush happens before any special construct is appended to `out`.
+
 function findUnescaped(s, what, from) {
   for (let j = from; j <= s.length - what.length; j++) {
     if (s[j] === '\\' && j + 1 < s.length && ESCAPABLE.has(s[j + 1])) {
@@ -265,21 +273,29 @@ function findSingleStar(s, from) {
 
 function inline(s, env) {
   let out = '';
+  let plain = '';
   let i = 0;
+  const flush = () => {
+    if (plain !== '') {
+      out += escapeHtml(plain);
+      plain = '';
+    }
+  };
   while (i < s.length) {
     const c = s[i];
     if (c === '\\' && i + 1 < s.length && ESCAPABLE.has(s[i + 1])) {
-      out += escapeHtml(s[i + 1]);
+      plain += ESCAPES[s[i + 1]] ?? s[i + 1];
       i += 2;
       continue;
     }
     if (c === '`') {
       const j = s.indexOf('`', i + 1);
       if (j > i + 1) {
+        flush();
         out += `<code>${escapeHtml(s.slice(i + 1, j))}</code>`;
         i = j + 1;
       } else {
-        out += '`';
+        plain += '`';
         i++;
       }
       continue;
@@ -288,20 +304,22 @@ function inline(s, env) {
       if (s[i + 1] === '*') {
         const j = findUnescaped(s, '**', i + 2);
         if (j > i + 2) {
+          flush();
           out += `<strong>${inline(s.slice(i + 2, j), env)}</strong>`;
           i = j + 2;
         } else {
-          out += '**';
+          plain += '**';
           i += 2;
         }
         continue;
       }
       const j = findSingleStar(s, i + 1);
       if (j > i + 1) {
+        flush();
         out += `<em>${inline(s.slice(i + 1, j), env)}</em>`;
         i = j + 1;
       } else {
-        out += '*';
+        plain += '*';
         i++;
       }
       continue;
@@ -311,17 +329,19 @@ function inline(s, env) {
       const m = k !== -1 && s[k + 1] === '(' ? s.indexOf(')', k + 2) : -1;
       const target = m === -1 ? '' : s.slice(k + 2, m);
       if (target !== '' && !/\s/.test(target)) {
+        flush();
         out += `<a href="${escapeHtml(env.link(target))}">${inline(s.slice(i + 1, k), env)}</a>`;
         i = m + 1;
         continue;
       }
-      out += '[';
+      plain += '[';
       i++;
       continue;
     }
-    out += escapeHtml(c);
+    plain += c;
     i++;
   }
+  flush();
   return out;
 }
 
