@@ -8,7 +8,13 @@
 
 const ESCAPES = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
 
+const ESCAPE_RE = /[&<>"']/;
+
 function escapeHtml(text) {
+  // Fast path: most text (and most code-span / plain content) holds no escapable character, so skip the
+  // replace entirely. The replace over a string with no match returns it unchanged anyway; testing first
+  // avoids building the result string and the regex scan's callback for the common case.
+  if (!ESCAPE_RE.test(text)) return text;
   return text.replace(/[&<>"']/g, (c) => ESCAPES[c]);
 }
 
